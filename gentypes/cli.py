@@ -1,5 +1,6 @@
 import argparse
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Sequence, Text, Tuple
 
@@ -18,6 +19,7 @@ class PythonModule:
     def __init__(self, path: Path):
         self.path = path
         self.sub_modules = set()
+        self.imports = defaultdict(set)
 
     def add_submodule(self, name: str) -> Path:
         file_path = self.path.joinpath(name)
@@ -25,17 +27,33 @@ class PythonModule:
 
         return file_path
 
+    def add_import(self, submodule_name: str, import_name: str):
+        self.imports[submodule_name].add(import_name)
+
     def write_init(self) -> Path:
         init_path = self.path / "__init__.py"
         sub_modules = sorted(self.sub_modules)
+        imported_names = sorted([
+            *sub_modules,
+            *(
+                name
+                for imports in self.imports.values()
+                for name in imports
+            )
+        ])
         with open(init_path, "w") as f:
             f.writelines([
                 HEADER_TEXT,
                 "\n",
                 *(f"from . import {name}\n" for name in sub_modules),
+                *(
+                    f"from .{module} import {name}\n"
+                    for module, imports in self.imports.items()
+                    for name in imports
+                ),
                 "\n",
                 "__all__ = [\n",
-                *(f'    "{name}",\n' for name in sub_modules),
+                *(f'    "{name}",\n' for name in imported_names),
                 "]\n"
             ])
 
@@ -96,13 +114,15 @@ def main(args: Optional[Sequence[Text]] = None):
                 print("Skipping...")
                 continue
 
+            root_name = schema_path.stem.title()
             generate_types(
                 schema_path,
                 python_path,
                 python_version=ns.python_version,
                 line_length=ns.line_length,
-                root_name=schema_path.stem.title()
+                root_name=root_name
             )
+            module.add_import(schema_path.stem, root_name)
             cleanup_file(python_path, ns.line_length, ns.python_version)
 
         init_path = module.write_init()
