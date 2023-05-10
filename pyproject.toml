@@ -16,6 +16,12 @@ build-backend = "poetry.core.masonry.api"
 python = ">=3.8,<4"
 typing-extensions = "^4.5.0"
 
+[tool.poetry.group.gentypes.dependencies]
+jsonschema-gentypes = "^2.2.3"
+isort = "^5.12.0"
+black = "^23.3.0"
+docformatter = "^1.6.5"
+
 
 [tool.isort]
 profile = "black"
