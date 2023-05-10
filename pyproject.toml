@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "cumulus-types"
+version = "0.1.0"
+description = "Type definitions for Cumulus."
+authors = ["Rohan Weeden <reweeden@alaska.edu>"]
+readme = "README.md"
+license = "Apache-2.0"
+packages = [{include = "cumulus_types"}]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.poetry.dependencies]
+python = ">=3.8,<4"
+typing-extensions = "^4.5.0"
+
+
+[tool.isort]
+profile = "black"
