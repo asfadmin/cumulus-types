@@ -1,7 +1,8 @@
 import argparse
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Sequence, Text
+from typing import Optional, Sequence, Text, Tuple
 
 import black
 import docformatter
@@ -14,6 +15,55 @@ from gentypes.api import API
 HEADER_TEXT = "# This is an auto-generated file. Do not modify by hand.\n"
 
 
+class PythonModule:
+    def __init__(self, path: Path):
+        self.path = path
+        self.sub_modules = set()
+        self.imports = defaultdict(set)
+
+    def add_submodule(self, name: str) -> Path:
+        file_path = self.path.joinpath(name)
+        self.sub_modules.add(name)
+
+        return file_path
+
+    def add_import(self, submodule_name: str, import_name: str):
+        self.imports[submodule_name].add(import_name)
+
+    def write_init(self) -> Path:
+        init_path = self.path / "__init__.py"
+        sub_modules = sorted(self.sub_modules)
+        imported_names = sorted([
+            *sub_modules,
+            *(
+                name
+                for imports in self.imports.values()
+                for name in imports
+            )
+        ])
+        with open(init_path, "w") as f:
+            f.writelines([
+                HEADER_TEXT,
+                "\n",
+                *(f"from . import {name}\n" for name in sub_modules),
+                *(
+                    f"from .{module} import {name}\n"
+                    for module, imports in self.imports.items()
+                    for name in imports
+                ),
+                "\n",
+                "__all__ = [\n",
+                *(f'    "{name}",\n' for name in imported_names),
+                "]\n"
+            ])
+
+        return init_path
+
+
+def python_version_type(val: str) -> Tuple[int, ...]:
+    return tuple(int(x) for x in val.split("."))
+
+
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", help="Path to cumulus directory", type=Path)
@@ -21,8 +71,10 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--python-version",
         help="The minimal Python version that will support the generate type stubs.",
-        default="3.8"
+        default="3.8",
+        type=python_version_type
     )
+    parser.add_argument("--line-length", help="Max line length", type=int, default=88)
 
     return parser
 
@@ -32,6 +84,7 @@ def main(args: Optional[Sequence[Text]] = None):
     ns = parser.parse_args(args)
 
     tasks_path = ns.path / "tasks"
+    tasks_module = PythonModule(Path("cumulus_types/tasks/"))
 
     for task_path in tasks_path.iterdir():
         task_name = task_path.name.replace("-", "_")
@@ -42,18 +95,17 @@ def main(args: Optional[Sequence[Text]] = None):
 
         print(f"Processing task {task_name}")
 
-        python_dir = Path("cumulus_types/tasks/") / task_name
+        python_dir = tasks_module.add_submodule(task_name)
         if not python_dir.exists():
             python_dir.mkdir(parents=True)
 
-        init_path = python_dir / "__init__.py"
-        init_path.write_text(HEADER_TEXT)
+        module = PythonModule(python_dir)
 
         for schema_path in schema_path.iterdir():
             if not schema_path.suffix == ".json":
                 continue
 
-            python_path = (python_dir / schema_path.name).with_suffix(".py")
+            python_path = module.add_submodule(schema_path.stem).with_suffix(".py")
             if (
                 python_path.exists()
                 and not ns.force
@@ -62,26 +114,34 @@ def main(args: Optional[Sequence[Text]] = None):
                 print("Skipping...")
                 continue
 
+            root_name = schema_path.stem.title()
             generate_types(
                 schema_path,
                 python_path,
                 python_version=ns.python_version,
-                root_name=schema_path.stem.title()
+                line_length=ns.line_length,
+                root_name=root_name
             )
+            module.add_import(schema_path.stem, root_name)
+            cleanup_file(python_path, ns.line_length, ns.python_version)
+
+        init_path = module.write_init()
+        cleanup_file(init_path, ns.line_length, ns.python_version)
+
+    init_path = tasks_module.path / "__init__.py"
+    with open(init_path, "w") as f:
+        f.write(HEADER_TEXT)
+
+    cleanup_file(init_path, ns.line_length, ns.python_version)
 
 
 def generate_types(
     src: Path,
     dst: Path,
-    python_version: Optional[str] = None,
-    line_length: int = 88,
+    python_version: Tuple[int, ...],
+    line_length: int,
     root_name: Optional[str] = None
 ) -> None:
-    if python_version is not None:
-        python_version_tup = tuple(int(x) for x in python_version.split("."))
-    else:
-        python_version_tup = sys.version_info[:3]
-
     print(f"Processing {src}")
 
     resolver = jsonschema_gentypes.resolver.RefResolver(str(src))
@@ -102,7 +162,7 @@ def generate_types(
         {
             "lineLength": line_length
         },
-        python_version_tup
+        python_version
     )
 
     if openapi:
@@ -123,32 +183,34 @@ def generate_types(
 
         lines += type_2.definition(line_length)
 
-    with open(dst, "w", encoding="utf-8") as destination_file:
-        destination_file.write(HEADER_TEXT)
-        destination_file.write("\n")
-        destination_file.write("\n".join(lines))
-        destination_file.write("\n")
+    with open(dst, "w", encoding="utf-8") as f:
+        f.write(HEADER_TEXT)
+        f.write("\n")
+        f.write("\n".join(lines))
+        f.write("\n")
 
+
+def cleanup_file(path: Path, line_length: int, python_version: Tuple[int, ...]):
     # Code cleanup
     black.format_file_in_place(
-        src=dst,
+        src=path,
         fast=False,
         mode=black.Mode(
             target_versions=set([
-                black.TargetVersion[f"PY{python_version_tup[0]}{python_version_tup[1]}"]
+                black.TargetVersion[f"PY{''.join(str(x) for x in python_version[:2])}"]
             ]),
             line_length=line_length,
         ),
         write_back=black.WriteBack.YES,
     )
 
-    isort.file(dst)
+    isort.file(path)
 
     configurator = docformatter.Configurater([
         "--quite",
         "--wrap-summaries", str(line_length),
         "--in-place",
-        str(dst)
+        str(path)
     ])
     configurator.do_parse_arguments()
     formator = docformatter.Formatter(

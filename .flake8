@@ -2,3 +2,13 @@
 max-line-length = 120
 extend-ignore = W503
 inline-quotes = double
+per-file-ignores =
+    # W605 invalid escape sequence
+    # E501 line too long
+    cumulus_types/tasks/discover_granules/config.py: W605
+    cumulus_types/tasks/move_granules/config.py: W605
+    cumulus_types/tasks/sync_granule/config.py: W605
+    cumulus_types/tasks/sync_granule/input.py: E501
+    cumulus_types/tasks/update_granules_cmr_metadata_file_links/config.py: W605
+
+exclude = .venv
